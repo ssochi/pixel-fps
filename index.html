@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#fff3ea">
+<title>脆皮捏捏模拟器</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<canvas id="stage" aria-label="捏捏操作区：按住、拖动来捏碎脆皮"></canvas>
+
+<header class="hud">
+  <div class="hud-row">
+    <h1>脆皮捏捏模拟器</h1>
+    <div class="stats"><span id="crackCount">咔嚓 0</span><span id="timer">0.0 秒</span></div>
+  </div>
+  <div class="meter">
+    <span id="modelName">牛油果</span>
+    <div class="bar" role="progressbar" aria-label="脆皮剩余"><i id="shellBar"></i></div>
+    <span id="shellPct">100%</span>
+  </div>
+</header>
+
+<p id="hint" class="hint">按住捏一捏，听个响</p>
+<p id="toast" class="toast" role="status" aria-live="polite"></p>
+
+<footer class="dock">
+  <button id="btnPick" type="button">换一款</button>
+  <button id="btnAgain" type="button" class="primary">再来一个</button>
+  <button id="btnSound" type="button" aria-pressed="true">声音 开</button>
+</footer>
+
+<div id="sheet" class="sheet" hidden>
+  <div class="sheet-backdrop" data-close></div>
+  <section class="sheet-panel" role="dialog" aria-label="选择款式">
+    <div class="sheet-head">
+      <h2>选一款来捏</h2>
+      <button type="button" class="ghost" data-close>开捏</button>
+    </div>
+    <div id="grid" class="grid"></div>
+    <div class="opt">
+      <span>脆皮</span>
+      <div id="optShell" class="chips"></div>
+    </div>
+    <div class="opt">
+      <span>内芯</span>
+      <div id="optCore" class="chips"></div>
+    </div>
+  </section>
+</div>
+
+<script type="module" src="src/main.js"></script>
+</body>
+</html>
