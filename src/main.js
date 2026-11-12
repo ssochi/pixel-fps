@@ -1,112 +1,97 @@
+/* global THREE */
 import { Sfx } from './audio.js';
-import { drawLeftovers, drawRound, drawTable } from './render.js';
-import { Round } from './round.js';
-import { CORE_TYPES, PRESETS, SHELL_TYPES, buildShellTexture, getOutline } from './shapes.js';
-import { clamp } from './util.js';
-
-// 老一点的浏览器没有 roundRect
-if (!CanvasRenderingContext2D.prototype.roundRect) {
-  CanvasRenderingContext2D.prototype.roundRect = function (x, y, w, h, r) {
-    r = Math.min(r, w / 2, h / 2);
-    this.moveTo(x + r, y);
-    this.arcTo(x + w, y, x + w, y + h, r); this.arcTo(x + w, y + h, x, y + h, r);
-    this.arcTo(x, y + h, x, y, r); this.arcTo(x, y, x + w, y, r);
-    this.closePath();
-  };
-}
+import { CORE_TYPES, FOODS, SHELL_TYPES } from './foods.js';
+import { Squishy } from './squishy.js';
+import { Stage, renderThumbs } from './stage.js';
 
 const $ = (id) => document.getElementById(id);
 const canvas = $('stage');
-const ctx = canvas.getContext('2d');
 const sfx = new Sfx();
 const canVibrate = () => !!navigator.vibrate && navigator.userActivation?.hasBeenActive !== false;
-
-const view = { w: 0, h: 0, dpr: 1, scale: 1, ox: 0, oy: 0, left: 0, right: 0, top: 0, bottom: 0 };
-const colors = { table0: '#f7d6c8', table1: '#efc2b4', tableEdge: 'rgba(255,255,255,.6)' };
+const stage = new Stage(canvas);
+// 网格密度：细一点裂缝更自然，但每帧要算的顶点也更多
+const DETAIL = 30;
 
 // ---------- 记住上次的选择 ----------
 const store = {
-  get() { try { return JSON.parse(localStorage.getItem('cuipi-nienie') || '{}'); } catch { return {}; } },
-  set(v) { try { localStorage.setItem('cuipi-nienie', JSON.stringify(v)); } catch { /* 隐私模式下可能不可用 */ } },
+  get() { try { return JSON.parse(localStorage.getItem('cuipi-nienie-3d') || '{}'); } catch { return {}; } },
+  set(v) { try { localStorage.setItem('cuipi-nienie-3d', JSON.stringify(v)); } catch { /* 隐私模式下可能不可用 */ } },
 };
 const saved = store.get();
 const state = {
-  preset: PRESETS.find((p) => p.id === saved.preset) || PRESETS[0],
+  food: FOODS.find((p) => p.id === saved.food) || FOODS[0],
   shell: SHELL_TYPES[saved.shell] ? saved.shell : null,
   core: CORE_TYPES[saved.core] ? saved.core : null,
   sound: saved.sound !== false,
 };
-state.shell ||= state.preset.shellType;
-state.core ||= state.preset.coreType;
+state.shell ||= state.food.shellType;
+state.core ||= state.food.coreType;
 sfx.enabled = state.sound;
+const save = () => store.set({ food: state.food.id, shell: state.shell, core: state.core, sound: state.sound });
 
 let round = null;
-let leftovers = null; // 上一只的碎片，淡出用
 let lastVibe = 0;
 let hintOff = false;
+let spawnT = 0;
+let burst = 0; // 本帧新裂开的碎片数
 
-function readColors() {
+function readTheme() {
   const cs = getComputedStyle(document.documentElement);
-  colors.table0 = cs.getPropertyValue('--table0').trim() || colors.table0;
-  colors.table1 = cs.getPropertyValue('--table1').trim() || colors.table1;
-  colors.tableEdge = cs.getPropertyValue('--table-edge').trim() || colors.tableEdge;
+  const dark = cs.colorScheme.includes('dark') && !cs.colorScheme.includes('light');
+  stage.setTheme(dark, cs.getPropertyValue('--table0').trim() || '#f2cdbd');
 }
 
 function resize() {
-  const w = window.innerWidth, h = window.innerHeight;
-  const dpr = Math.min(window.devicePixelRatio || 1, 2);
-  canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr);
-  view.w = w; view.h = h; view.dpr = dpr;
-  view.scale = Math.min(w / 300, h / 540, 2.4);
-  view.ox = w / 2; view.oy = h * 0.47;
-  view.left = -view.ox / view.scale; view.right = (w - view.ox) / view.scale;
-  view.top = -view.oy / view.scale; view.bottom = (h - view.oy) / view.scale;
-  if (round) round.walls = [view.left + 10, view.right - 10];
-  readColors();
+  stage.resize(window.innerWidth, window.innerHeight);
+  readTheme();
 }
 
 function newRound() {
-  if (round && (round.shards.length || round.crumbs.length)) leftovers = { round, alpha: 1 };
-  const texScale = clamp(view.scale * view.dpr, 2, 4);
-  round = new Round(state.preset, state.shell, state.core, (Math.random() * 2 ** 31) | 0, texScale, {
+  if (round) { stage.scene.remove(round.group); round.dispose(); }
+  round = new Squishy(state.food, state.shell, state.core, (Math.random() * 2 ** 31) | 0, DETAIL, {
     crack(e) {
       sfx.crack(e);
       if (!hintOff) { hintOff = true; $('hint').classList.add('off'); }
       const now = performance.now();
       if (canVibrate() && now - lastVibe > 45) { lastVibe = now; try { navigator.vibrate(e > 0.7 ? 12 : 6); } catch { /* 无震动 */ } }
     },
-    detach() {},
+    puff(pos, e) { burst++; if (Math.random() < 0.3 + e * 0.5) stage.puff(pos, 0.22 + e * 0.28); },
     land(v) { sfx.land(v); },
     squishTap() { if (state.core === 'jelly') sfx.bubble(0.1); },
     done(r) {
       sfx.chime();
       if (canVibrate()) try { navigator.vibrate([20, 40, 30]); } catch { /* 无震动 */ }
-      showToast(`捏完啦！用时 ${r.elapsed.toFixed(1)} 秒 · 咔嚓 ${r.cracks} 声`, '内芯还能接着捏，桌上的碎片也能再碾一遍');
+      showToast(`脆皮捏光啦！用时 ${r.elapsed.toFixed(1)} 秒 · 咔嚓 ${r.cracks} 声`, '内芯还能接着捏，盘子里的碎片点一下能碾成渣');
     },
   });
-  round.walls = [view.left + 10, view.right - 10];
+  stage.scene.add(round.group);
+  stage.target.y = round.shape.top * 0.42;
+  stage.place();
+  spawnT = 0;
   sfx.kind = state.shell;
-  $('modelName').textContent = state.preset.name;
+  $('modelName').textContent = state.food.name;
   hideToast();
-  store.set({ preset: state.preset.id, shell: state.shell, core: state.core, sound: state.sound });
+  save();
 }
 
-// ---------- 输入 ----------
-const toWorld = (e) => [(e.clientX - view.ox) / view.scale, (e.clientY - view.oy) / view.scale];
+// ---------- 输入：按在捏捏上 = 捏；按在空白处拖 = 转视角 ----------
+const orbiting = new Map();
 canvas.addEventListener('pointerdown', (e) => {
   e.preventDefault();
   if (e.pointerType === 'mouse' || sfx.ctx) sfx.unlock();
-  const [x, y] = toWorld(e);
-  if (round.pointerDown(e.pointerId, x, y)) {
-    try { canvas.setPointerCapture(e.pointerId); } catch { /* 合成事件没有可捕获的指针 */ }
-  }
+  const what = round.pointerDown(e.pointerId, stage.ray(e.clientX, e.clientY));
+  if (!what) orbiting.set(e.pointerId, [e.clientX, e.clientY]);
+  if (what !== 'shard') { try { canvas.setPointerCapture(e.pointerId); } catch { /* 合成事件没有可捕获的指针 */ } }
 });
 canvas.addEventListener('pointermove', (e) => {
-  const [x, y] = toWorld(e);
-  round.pointerMove(e.pointerId, x, y);
+  const o = orbiting.get(e.pointerId);
+  if (o) {
+    stage.orbit(e.clientX - o[0], e.clientY - o[1]);
+    o[0] = e.clientX; o[1] = e.clientY;
+  } else round.pointerMove(e.pointerId, stage.ray(e.clientX, e.clientY));
 });
 for (const type of ['pointerup', 'pointercancel', 'lostpointercapture'])
-  canvas.addEventListener(type, (e) => round.pointerUp(e.pointerId));
+  canvas.addEventListener(type, (e) => { orbiting.delete(e.pointerId); round.pointerUp(e.pointerId); });
 // 触屏上 pointerdown 不算"用户激活"，要等手指抬起才能真正开声音
 for (const type of ['pointerup', 'touchend', 'click'])
   window.addEventListener(type, () => sfx.unlock(), { passive: true });
@@ -147,8 +132,7 @@ function syncSound() {
 soundBtn.addEventListener('click', () => {
   state.sound = !state.sound;
   sfx.unlock(); sfx.setEnabled(state.sound);
-  syncSound();
-  store.set({ preset: state.preset.id, shell: state.shell, core: state.core, sound: state.sound });
+  syncSound(); save();
 });
 syncSound();
 
@@ -156,25 +140,22 @@ syncSound();
 const sheet = $('sheet');
 function buildSheet() {
   const grid = $('grid');
-  for (const p of PRESETS) {
+  let thumbs = [];
+  try { thumbs = renderThumbs(FOODS); } catch { /* 没有小图也能选 */ }
+  FOODS.forEach((p, i) => {
     const b = document.createElement('button');
     b.type = 'button'; b.className = 'card'; b.dataset.id = p.id;
-    const { m } = getOutline(p);
-    const size = 152, s = (size * 0.86) / Math.max(m.w, m.h);
-    const tex = buildShellTexture(p, s);
-    const c = document.createElement('canvas');
-    c.width = c.height = size;
-    c.getContext('2d').drawImage(tex.canvas, (size - tex.canvas.width) / 2, (size - tex.canvas.height) / 2);
+    if (thumbs[i]) b.appendChild(thumbs[i]);
     const name = document.createElement('span'); name.textContent = p.name;
     const tag = document.createElement('small');
     tag.textContent = `${SHELL_TYPES[p.shellType].name} · ${CORE_TYPES[p.coreType].name}`;
-    b.append(c, name, tag);
+    b.append(name, tag);
     b.addEventListener('click', () => {
-      state.preset = p; state.shell = p.shellType; state.core = p.coreType;
+      state.food = p; state.shell = p.shellType; state.core = p.coreType;
       syncSheet(); newRound();
     });
     grid.appendChild(b);
-  }
+  });
   const chips = (host, types, key) => {
     for (const k in types) {
       const b = document.createElement('button');
@@ -189,7 +170,7 @@ function buildSheet() {
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') sheet.hidden = true; });
 }
 function syncSheet() {
-  for (const b of $('grid').children) b.setAttribute('aria-pressed', String(b.dataset.id === state.preset.id));
+  for (const b of $('grid').children) b.setAttribute('aria-pressed', String(b.dataset.id === state.food.id));
   for (const b of $('optShell').children) b.setAttribute('aria-pressed', String(b.dataset.k === state.shell));
   for (const b of $('optCore').children) b.setAttribute('aria-pressed', String(b.dataset.k === state.core));
 }
@@ -197,30 +178,33 @@ $('btnPick').addEventListener('click', () => { sfx.unlock(); syncSheet(); sheet.
 
 // ---------- 主循环 ----------
 let last = performance.now();
+const easeOutBack = (t) => 1 + 2.4 * (t - 1) ** 3 + 1.4 * (t - 1) ** 2;
 function frame(now) {
   const dt = Math.min(1 / 30, Math.max(1 / 240, (now - last) / 1000));
   last = now;
+  burst = 0;
   round.update(dt);
-  sfx.squish(round.squish, state.core === 'jelly');
-
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  const k = view.dpr * view.scale;
-  ctx.setTransform(k, 0, 0, k, view.dpr * view.ox, view.dpr * view.oy);
-  drawTable(ctx, view, colors);
-  if (leftovers) {
-    leftovers.alpha -= dt * 2.6;
-    if (leftovers.alpha <= 0) leftovers = null;
-    else drawLeftovers(ctx, leftovers.round, leftovers.alpha);
+  // 这一帧同时裂了好几块：加一声厚的、镜头震一下、震动长一点
+  if (burst >= 4) {
+    const lv = Math.min(1, burst / 14);
+    sfx.crunch(lv);
+    stage.kick(0.012 + 0.03 * lv);
+    if (canVibrate()) try { navigator.vibrate(18 + Math.round(22 * lv)); } catch { /* 无震动 */ }
   }
-  drawRound(ctx, round);
+  stage.update(dt);
+  if (spawnT < 1) {
+    spawnT = Math.min(1, spawnT + dt / 0.4);
+    round.group.scale.setScalar(Math.max(0.01, easeOutBack(spawnT)));
+  }
+  sfx.squish(round.squish, state.core === 'jelly');
+  stage.render();
   updateHud();
   requestAnimationFrame(frame);
 }
 
 window.addEventListener('resize', resize);
-window.matchMedia?.('(prefers-color-scheme: dark)').addEventListener?.('change', readColors);
-new MutationObserver(readColors).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+window.matchMedia?.('(prefers-color-scheme: dark)').addEventListener?.('change', readTheme);
+new MutationObserver(readTheme).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
 document.addEventListener('visibilitychange', () => { last = performance.now(); });
 
 resize();
@@ -229,4 +213,4 @@ newRound();
 requestAnimationFrame(frame);
 
 // 调试 / 自动化测试用
-window.__nienie = { get round() { return round; }, view, state, sfx, newRound };
+window.__nienie = { get round() { return round; }, stage, state, sfx, newRound, THREE };

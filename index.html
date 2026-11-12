@@ -8,7 +8,7 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<canvas id="stage" aria-label="捏捏操作区：按住、拖动来捏碎脆皮"></canvas>
+<canvas id="stage" aria-label="捏捏操作区：按住捏捏来捏，拖动空白处旋转视角"></canvas>
 
 <header class="hud">
   <div class="hud-row">
@@ -22,7 +22,7 @@
   </div>
 </header>
 
-<p id="hint" class="hint">按住捏一捏，听个响</p>
+<p id="hint" class="hint">按住捏一捏 · 拖空白处转视角</p>
 <p id="toast" class="toast" role="status" aria-live="polite"></p>
 
 <footer class="dock">
@@ -50,6 +50,7 @@
   </section>
 </div>
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script type="module" src="src/main.js"></script>
 </body>
 </html>

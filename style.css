@@ -137,8 +137,7 @@ button.ghost { background: var(--accent); color: var(--accent-ink); box-shadow: 
 }
 .sheet-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
 .sheet-head h2 { margin: 0; font-size: 17px; font-weight: 800; }
-.grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
-@media (max-width: 420px) { .grid { grid-template-columns: repeat(4, 1fr); gap: 6px; } }
+.grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
 .card {
   display: flex; flex-direction: column; align-items: center; gap: 2px;
   padding: 8px 2px 8px; min-height: 0; border-radius: 16px;
@@ -146,7 +145,7 @@ button.ghost { background: var(--accent); color: var(--accent-ink); box-shadow: 
   border: 2px solid transparent;
   font-size: 13px;
 }
-.card canvas { width: 100%; max-width: 76px; aspect-ratio: 1; }
+.card canvas { width: 100%; max-width: 92px; aspect-ratio: 1; }
 .card small { font-size: 10.5px; font-weight: 500; color: var(--ink-soft); }
 .card[aria-pressed="true"] { border-color: var(--accent); background: var(--card); }
 .opt { display: flex; align-items: center; gap: 12px; margin-top: 14px; font-size: 13px; font-weight: 700; color: var(--ink-soft); }

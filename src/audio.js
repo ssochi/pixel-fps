@@ -137,6 +137,14 @@ export class Sfx {
     this.play(set[(Math.random() * set.length) | 0], 0.22 + 0.6 * energy, 0.85 + Math.random() * 0.4, delay);
   }
 
+  /** 一下子碎一大片：在脆响下面垫一声更厚的"咔啦" */
+  crunch(level) {
+    if (!this.running || !this.enabled) return;
+    const set = this.buf.thick;
+    this.play(set[(Math.random() * set.length) | 0], 0.3 + 0.4 * level, 0.55 + Math.random() * 0.15);
+    this.play(set[(Math.random() * set.length) | 0], 0.2 + 0.3 * level, 0.8 + Math.random() * 0.2, 0.03);
+  }
+
   land(v) {
     if (!this.ctx || !this.enabled || Math.random() > 0.7) return;
     const set = this.buf.tick;
