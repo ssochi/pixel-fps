@@ -55,7 +55,7 @@ function baked(p, g, pal, top) {
  */
 export const FOODS = [
   {
-    id: 'crossbun', name: '十字餐包', shellType: 'std', coreType: 'slow',
+    id: 'crossbun', name: '十字餐包', shellType: 'std', coreType: 'vaseline',
     sdf: seated(ellipsoid(0.26, 1.0, 0.74, 1.0)), center: [0, 0.3, 0],
     detail(p, d) {
       const top = smoothstep(0.1, 0.5, d[1]);
@@ -64,10 +64,10 @@ export const FOODS = [
     },
     pal: [0xfbe6ae, 0xeeb556, 0xc6792a, 0xfff1c9].map(hex),
     color(p, g) { return baked(p, g, this.pal, 0.85); },
-    rough: 0.5, wall: 0xfff6dc, core: 0xffdf9e, coreRough: 0.85,
+    rough: 0.5, wall: 0xfff6dc, core: 0xffcf73,
   },
   {
-    id: 'pineapple', name: '菠萝包', shellType: 'std', coreType: 'slow',
+    id: 'pineapple', name: '菠萝包', shellType: 'std', coreType: 'vaseline',
     sdf: seated(ellipsoid(0.3, 0.98, 0.8, 0.98)), center: [0, 0.32, 0],
     detail(p, d) {
       const top = smoothstep(0.02, 0.3, d[1]);
@@ -80,10 +80,10 @@ export const FOODS = [
       const s = noise3(p[0] * 26, p[1] * 26, p[2] * 26) > 0.74 ? 0.1 : 0; // 砂糖粒
       return [c[0] + s, c[1] + s, c[2] + s];
     },
-    rough: 0.62, wall: 0xfff6d0, core: 0xffd66e, coreRough: 0.85,
+    rough: 0.62, wall: 0xfff6d0, core: 0xffc44a,
   },
   {
-    id: 'milkstick', name: '牛奶棒', shellType: 'thin', coreType: 'jelly',
+    id: 'milkstick', name: '牛奶棒', shellType: 'thin', coreType: 'vaseline',
     sdf: seated(capsuleX(0.3, 0.72, 0.5, 0.82)), center: [0, 0.3, 0],
     detail(p, d) {
       const top = smoothstep(0.25, 0.6, d[1] + Math.abs(d[0]) * 0.5);
@@ -92,10 +92,10 @@ export const FOODS = [
     },
     pal: [0xfff3cf, 0xfbdc8e, 0xe7a94c, 0xfffbe8].map(hex),
     color(p, g) { return baked(p, g, this.pal, 1.0); },
-    rough: 0.48, wall: 0xfffbea, core: 0xfff1d0, coreRough: 0.35,
+    rough: 0.48, wall: 0xfffbea, core: 0xffe6a6,
   },
   {
-    id: 'ganache', name: '生巧砖', shellType: 'thick', coreType: 'clay',
+    id: 'ganache', name: '生巧砖', shellType: 'thick', coreType: 'vaseline',
     sdf: seated(rbox(0.4, 0.86, 0.42, 0.6, 0.13), 0.05), center: [0, 0.4, 0],
     detail(p) { return [(fbm(p[0] * 5, p[1] * 5, p[2] * 5) - 0.5) * 0.02, 0]; },
     color(p) {
@@ -103,10 +103,10 @@ export const FOODS = [
       const dust = smoothstep(0.6, 0.84, p[1]) * (0.35 + 0.65 * fbm(p[0] * 4, 5, p[2] * 4)); // 顶上撒的可可粉
       return mix3(mix3(hex(0x33190f), hex(0x44241a), n), hex(0x7a4e36), dust * 0.6);
     },
-    rough: 0.36, wall: 0x6b4027, core: 0xf7e2c6, coreRough: 0.8,
+    rough: 0.36, wall: 0x6b4027, core: 0xf6d9ae,
   },
   {
-    id: 'nutball', name: '坚果巧克力球', shellType: 'thick', coreType: 'slow',
+    id: 'nutball', name: '坚果巧克力球', shellType: 'thick', coreType: 'vaseline',
     sdf: seated(ellipsoid(0.82, 0.88, 0.88, 0.88), 0.14), center: [0, 0.8, 0],
     bump(p) { return smoothstep(0.5, 0.78, noise3(p[0] * 4.6 + 11, p[1] * 4.6 + 3, p[2] * 4.6 + 7)); },
     detail(p) { return [0.085 * this.bump(p), 0]; },
@@ -114,10 +114,10 @@ export const FOODS = [
       const b = this.bump(p), n = fbm(p[0] * 3, p[1] * 3, p[2] * 3);
       return mix3(mix3(hex(0x4a2814), hex(0x7a4826), n), hex(0xb9824a), b * 0.45);
     },
-    rough: 0.32, wall: 0x8a5a36, core: 0xc98a4e, coreRough: 0.7,
+    rough: 0.32, wall: 0x8a5a36, core: 0xc98a4e,
   },
   {
-    id: 'daifuku', name: '草莓大福', shellType: 'thin', coreType: 'jelly',
+    id: 'daifuku', name: '草莓大福', shellType: 'thin', coreType: 'vaseline',
     sdf: seated(ellipsoid(0.34, 0.95, 0.74, 0.95), 0.2), center: [0, 0.36, 0],
     detail(p) { return [(fbm(p[0] * 2.2, p[1] * 2.2, p[2] * 2.2) - 0.5) * 0.05, 0]; },
     color(p) {
@@ -125,7 +125,7 @@ export const FOODS = [
       const n = fbm(p[0] * 4, p[1] * 4, p[2] * 4);
       return mix3(mix3(hex(0xf6e9e2), hex(0xffffff), n), hex(0xf9b9c2), blush * 0.75);
     },
-    rough: 0.92, wall: 0xffffff, core: 0xff8ea3, coreRough: 0.3,
+    rough: 0.92, wall: 0xffffff, core: 0xff8ea3,
   },
 ];
 
@@ -137,7 +137,8 @@ export const SHELL_TYPES = {
 };
 
 export const CORE_TYPES = {
-  slow: { name: '慢回弹', mode: 'slow', back: 1.15 },
-  clay: { name: '黏土', mode: 'clay' },
-  jelly: { name: '爆浆', mode: 'jelly', w: 15, zeta: 0.22 },
+  // plastic：捏了不回弹；depth：一下最多按多深；sink：陷下去的快慢；ooze：会不会从裂缝里挤出来
+  vaseline: { name: '凡士林', plastic: true, depth: 0.56, sink: 0.4, ooze: true, rough: 0.3, gloss: 1.25 },
+  clay: { name: '黏土', plastic: true, depth: 0.32, sink: 0.6, ooze: false, rough: 0.92, gloss: 0.6 },
+  slow: { name: '慢回弹', plastic: false, depth: 0.52, sink: 0.55, back: 1.15, ooze: false, rough: 0.8, gloss: 0.8 },
 };

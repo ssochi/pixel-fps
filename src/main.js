@@ -10,7 +10,7 @@ const sfx = new Sfx();
 const canVibrate = () => !!navigator.vibrate && navigator.userActivation?.hasBeenActive !== false;
 const stage = new Stage(canvas);
 // 网格密度：细一点裂缝更自然，但每帧要算的顶点也更多
-const DETAIL = 30;
+const DETAIL = window.matchMedia?.('(pointer: coarse)').matches ? 26 : 30;
 
 // ---------- 记住上次的选择 ----------
 const store = {
@@ -57,11 +57,11 @@ function newRound() {
     },
     puff(pos, e) { burst++; if (Math.random() < 0.3 + e * 0.5) stage.puff(pos, 0.22 + e * 0.28); },
     land(v) { sfx.land(v); },
-    squishTap() { if (state.core === 'jelly') sfx.bubble(0.1); },
+    squishTap() { if (state.core === 'vaseline') sfx.bubble(0.1); },
     done(r) {
       sfx.chime();
       if (canVibrate()) try { navigator.vibrate([20, 40, 30]); } catch { /* 无震动 */ }
-      showToast(`脆皮捏光啦！用时 ${r.elapsed.toFixed(1)} 秒 · 咔嚓 ${r.cracks} 声`, '内芯还能接着捏，盘子里的碎片点一下能碾成渣');
+      showToast(`脆皮捏光啦！用时 ${r.elapsed.toFixed(1)} 秒 · 咔嚓 ${r.cracks} 声`, '内馅还能接着揉，盘子里的碎片点一下能碾成渣');
     },
   });
   stage.scene.add(round.group);
@@ -196,7 +196,9 @@ function frame(now) {
     spawnT = Math.min(1, spawnT + dt / 0.4);
     round.group.scale.setScalar(Math.max(0.01, easeOutBack(spawnT)));
   }
-  sfx.squish(round.squish, state.core === 'jelly');
+  sfx.squish(round.squish, state.core === 'vaseline');
+  // 内馅正从裂缝里往外挤：咕叽
+  if (round.oozing > 0.02) { round.oozing = 0; sfx.bubble(0.07); }
   stage.render();
   updateHud();
   requestAnimationFrame(frame);

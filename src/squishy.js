@@ -34,8 +34,26 @@ export class Squishy {
     this.P = Float32Array.from(P0);
     this.N = Float32Array.from(N0);
     this.O = new Float32Array(V * 3); // 相对出厂形状的位移
-    this.B = new Float32Array(V * 3); // 黏土：已经"定型"的位移
-    this.Vel = new Float32Array(V * 3);
+    this.flow = new Float32Array(V);
+    // 顶点邻接表（抹平用）、每个顶点分到的面积和出厂体积（体积守恒用）
+    const sets = Array.from({ length: V }, () => new Set());
+    this.va = new Float32Array(V);
+    for (let f = 0; f < idx.length; f += 3) {
+      const a = idx[f], b = idx[f + 1], c = idx[f + 2];
+      sets[a].add(b).add(c); sets[b].add(a).add(c); sets[c].add(a).add(b);
+      const ux = P0[b * 3] - P0[a * 3], uy = P0[b * 3 + 1] - P0[a * 3 + 1], uz = P0[b * 3 + 2] - P0[a * 3 + 2];
+      const vx = P0[c * 3] - P0[a * 3], vy = P0[c * 3 + 1] - P0[a * 3 + 1], vz = P0[c * 3 + 2] - P0[a * 3 + 2];
+      const ar = Math.hypot(uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx) / 6;
+      this.va[a] += ar; this.va[b] += ar; this.va[c] += ar;
+    }
+    this.nbrAt = new Int32Array(V + 1);
+    for (let i = 0; i < V; i++) this.nbrAt[i + 1] = this.nbrAt[i] + sets[i].size;
+    this.nbr = new Int32Array(this.nbrAt[V]);
+    sets.forEach((st, i) => { let k = this.nbrAt[i]; for (const v of st) this.nbr[k++] = v; });
+    this.vol0 = this.volume();
+    this.Z = new Float32Array(V); // 从裂缝里挤出来的内馅，沿法线鼓起多高
+    this.pressure = new Float32Array(V);
+    this.oozing = 0;
     this.T = new Float32Array(V * 3);
     this.W = new Float32Array(V);
     this.center = new THREE.Vector3(0, shape.top * 0.5, 0);
@@ -57,7 +75,7 @@ export class Squishy {
     cg.setAttribute('normal', new THREE.BufferAttribute(this.N, 3).setUsage(THREE.DynamicDrawUsage));
     cg.setIndex(new THREE.BufferAttribute(idx, 1));
     cg.boundingSphere = new THREE.Sphere(this.center.clone(), 4);
-    this.coreMesh = new THREE.Mesh(cg, new THREE.MeshStandardMaterial({ color: food.core, roughness: food.coreRough, metalness: 0 }));
+    this.coreMesh = new THREE.Mesh(cg, new THREE.MeshStandardMaterial({ color: food.core, roughness: this.coreType.rough, metalness: 0, envMapIntensity: this.coreType.gloss }));
     this.coreMesh.castShadow = this.coreMesh.receiveShadow = true;
     this.coreMesh.frustumCulled = false;
     this.group.add(this.coreMesh);
@@ -68,11 +86,32 @@ export class Squishy {
       ...f,
       state: INTACT,
       limit: this.shellType.limit * (0.55 + rng() * 0.9),
-      loose: 0,
+      loose: 0, pb: 0, pd: 0,
       q: new THREE.Quaternion(), jq: new THREE.Quaternion(), lift: 0,
       x: new THREE.Vector3(), v: new THREE.Vector3(), w: new THREE.Vector3(),
       age: 0, settled: false, landed: false, written: false,
     }));
+    // 裂缝线：落在两块碎片交界上的顶点（往两边各晕开一圈），内馅就是从这些地方挤出来的
+    this.vOwnA = new Int32Array(V).fill(-1);
+    this.vOwnB = new Int32Array(V).fill(-1);
+    this.seam = new Float32Array(V);
+    for (let f = 0; f < idx.length / 3; f++) {
+      const o = this.owner[f];
+      if (o < 0) continue;
+      for (let k = 0; k < 3; k++) {
+        const v = idx[f * 3 + k];
+        if (this.vOwnA[v] < 0) this.vOwnA[v] = o;
+        else if (this.vOwnA[v] !== o) { this.vOwnB[v] = o; this.seam[v] = 1; }
+      }
+    }
+    const soft = Float32Array.from(this.seam);
+    for (let f = 0; f < idx.length; f += 3)
+      for (let k = 0; k < 3; k++) {
+        const a = idx[f + k], b = idx[f + ((k + 1) % 3)];
+        if (this.seam[a] * 0.45 > soft[b]) soft[b] = this.seam[a] * 0.45;
+        if (this.seam[b] * 0.45 > soft[a]) soft[a] = this.seam[b] * 0.45;
+      }
+    this.seam = soft;
     this.totalArea = this.frags.reduce((s, f) => s + f.area, 0);
     this.goneArea = 0;
     this.buildShell(fx.adj);
@@ -96,7 +135,6 @@ export class Squishy {
     this.endAt = -1;
     this.done = false;
     this.squish = 0;
-    this.rebase = false;
   }
 
   get shellLeft() { return clamp(1 - this.goneArea / this.totalArea, 0, 1); }
@@ -185,11 +223,14 @@ export class Squishy {
   }
 
   aim(pr, vi, ray) {
-    const { P0, N0 } = this.shape;
+    const { P0, N0 } = this.shape, plastic = this.coreType.plastic;
+    // 膏体没有"原形"可言：以当前形状为准。慢回弹才以出厂形状为准
+    const R = plastic ? this.P : P0, RN = plastic ? this.N : N0;
+    if (pr.vi !== vi) pr.moved += Math.hypot(P0[vi * 3] - P0[pr.vi * 3], P0[vi * 3 + 1] - P0[pr.vi * 3 + 1], P0[vi * 3 + 2] - P0[pr.vi * 3 + 2]);
     pr.vi = vi;
-    pr.tc.set(P0[vi * 3], P0[vi * 3 + 1], P0[vi * 3 + 2]);
+    pr.tc.set(R[vi * 3], R[vi * 3 + 1], R[vi * 3 + 2]);
     // 按压方向：主要顺着表面往里，掺一点视线方向。所以捏侧面是横着挤，按顶上是往下压
-    pr.td.set(-N0[vi * 3], -N0[vi * 3 + 1], -N0[vi * 3 + 2]).multiplyScalar(0.65).addScaledVector(ray.direction, 0.35).normalize();
+    pr.td.set(-RN[vi * 3], -RN[vi * 3 + 1], -RN[vi * 3 + 2]).multiplyScalar(0.65).addScaledVector(ray.direction, 0.35).normalize();
   }
 
   pointerDown(id, ray) {
@@ -197,7 +238,7 @@ export class Squishy {
     if (!h) return this.crushAt(ray) ? 'shard' : null;
     const pr = {
       vi: h.vi, c: new THREE.Vector3(), tc: new THREE.Vector3(), d: new THREE.Vector3(), td: new THREE.Vector3(),
-      ray: null, t: 0, depth: 0, thick: 1, speed: 0,
+      ray: null, t: 0, depth: 0, thick: 1, speed: 0, moved: 0, delivered: 0, peak: 0,
     };
     this.aim(pr, h.vi, ray);
     pr.c.copy(pr.tc); pr.d.copy(pr.td);
@@ -218,7 +259,7 @@ export class Squishy {
   }
 
   pointerUp(id) {
-    if (this.presses.delete(id)) this.rebase = true;
+    this.presses.delete(id);
   }
 
   /** 点盘子上的碎片：碾成渣 */
@@ -347,68 +388,97 @@ export class Squishy {
   }
 
   stepCore(dt) {
-    const { P0, N0, V, idx } = this.shape, { P, O, B, T, W, Vel } = this;
+    const { P0, N0, V, idx } = this.shape, { P, N, O, T, W, Z, pressure } = this;
+    const core = this.coreType, plastic = core.plastic;
+    const R = plastic ? P : P0, RN = plastic ? N : N0;
+    const flow = this.flow;
     T.fill(0); W.fill(0);
+    if (plastic) flow.fill(0);
+    if (core.ooze) pressure.fill(0);
 
     for (const pr of this.presses.values()) {
       const cx = pr.c.x, cy = pr.c.y, cz = pr.c.z, dx = pr.d.x, dy = pr.d.y, dz = pr.d.z;
-      // 这个方向上东西有多厚：决定最多能按多深，免得从另一面戳出去
+      // 这个方向上东西有多厚：决定最多能按多深
       let thick = 0.2;
       for (let i = 0; i < V; i++) {
-        const qx = P0[i * 3] - cx, qy = P0[i * 3 + 1] - cy, qz = P0[i * 3 + 2] - cz;
+        const qx = R[i * 3] - cx, qy = R[i * 3 + 1] - cy, qz = R[i * 3 + 2] - cz;
         const al = qx * dx + qy * dy + qz * dz;
         if (al > thick && qx * qx + qy * qy + qz * qz - al * al < 0.05) thick = al;
       }
       pr.thick += (thick - pr.thick) * Math.min(1, dt * 10);
-      const dmax = Math.min(0.52, pr.thick * 0.44);
-      const D = (pr.depth = dmax * (1 - Math.exp(-pr.t / 0.55)));
+      const dmax = Math.min(core.depth, pr.thick * 0.44);
+      let D, sqk, e, wAll;
+      if (plastic) {
+        // 膏体：只往前走、不回头。每帧把"还没按到位的那部分"推进去一点；
+        // 手指滑到新地方，那里还没被按过，所以又能接着往下陷 —— 这就是抹、犁的效果
+        pr.delivered *= Math.exp(-pr.moved / 0.3);
+        pr.moved = 0;
+        D = Math.max(0, dmax - pr.delivered) * (1 - Math.exp(-dt / core.sink));
+        pr.delivered += D;
+        pr.depth = pr.delivered;
+        // 整体压扁只算"比之前按得更深"的那部分：手指来回抹只会犁出沟，不会把整坨越推越远
+        const deeper = Math.max(0, pr.delivered - pr.peak);
+        pr.peak = Math.max(pr.peak, pr.delivered);
+        sqk = (0.45 * deeper) / pr.thick; // 近端被推过去、远端贴着盘子不动 → 整体变扁
+        e = 0; // 往四周摊开多少，交给下面的体积守恒去算
+        wAll = D > 1e-5 ? 0.35 : 0;
+      } else {
+        D = pr.depth = dmax * (1 - Math.exp(-pr.t / core.sink));
+        const s = 0.34 * (D / 0.52) ** 2;
+        sqk = Math.min(s, 0.3 / pr.thick);
+        e = 1 / Math.sqrt(1 - s) - 1;
+        wAll = s * 2.5;
+      }
       const sig2 = 0.34 * 0.34;
-      const s = 0.34 * (D / 0.52) ** 2; // 整体被压扁的程度
-      const e = 1 / Math.sqrt(1 - s) - 1; // 体积守恒：压扁多少，就往四周胀多少
-
       for (let i = 0; i < V; i++) {
         const j = i * 3;
-        const qx = P0[j] - cx, qy = P0[j + 1] - cy, qz = P0[j + 2] - cz;
+        const qx = R[j] - cx, qy = R[j + 1] - cy, qz = R[j + 2] - cz;
         const al = qx * dx + qy * dy + qz * dz;
         const px = qx - al * dx, py = qy - al * dy, pz = qz - al * dz;
         const x2 = (px * px + py * py + pz * pz) / sig2;
         const near = al < 0.7 ? 1 : al > 1.3 ? 0 : 1 - (al - 0.7) / 0.6;
         const g = Math.exp(-x2 * 0.5) * near; // 指尖下的凹坑
-        const b = x2 * Math.exp(-x2 / 2.9) * 0.2 * near; // 坑边一圈鼓包
-        const sq = Math.min(s, 0.3 / pr.thick) * Math.max(0, pr.thick - al); // 远端贴着盘子不动，近端被推过去
-        const push = D * g + sq;
-        T[j] += dx * push + N0[j] * D * b + px * e;
-        T[j + 1] += dy * push + N0[j + 1] * D * b + py * e;
-        T[j + 2] += dz * push + N0[j + 2] * D * b + pz * e;
-        const w = g + b * 2 + s * 2.5;
+        const b = plastic ? 0 : x2 * Math.exp(-x2 / 2.9) * 0.2 * near; // 坑边被挤起来的一圈
+        if (plastic) flow[i] += Math.exp(-x2 / 9) * (1 - g); // 被挤走的料主要堆到坑的周围
+        const push = D * g + sqk * Math.max(0, pr.thick - al);
+        T[j] += dx * push + RN[j] * D * b + px * e;
+        T[j + 1] += dy * push + RN[j + 1] * D * b + py * e;
+        T[j + 2] += dz * push + RN[j + 2] * D * b + pz * e;
+        const w = g + b * 2 + wAll;
         if (w > W[i]) W[i] = w;
+        if (core.ooze) pressure[i] += pr.depth * Math.exp(-x2 * 0.14) * near;
       }
     }
 
-    const mode = this.coreType.mode;
     let moved = 0;
-    if (mode === 'jelly') {
-      const w2 = this.coreType.w ** 2, damp = 2 * this.coreType.zeta * this.coreType.w;
-      const h = dt / 2;
-      for (let sub = 0; sub < 2; sub++)
-        for (let j = 0; j < V * 3; j++) {
-          Vel[j] += (w2 * (T[j] - O[j]) - damp * Vel[j]) * h;
-          const d = Vel[j] * h;
-          O[j] += d; moved += Math.abs(d);
-        }
-    } else if (mode === 'clay') {
-      if (this.rebase) for (let j = 0; j < V * 3; j++) B[j] = O[j] - T[j];
+    if (plastic) {
+      for (let j = 0; j < V * 3; j++) { O[j] += T[j]; moved += Math.abs(T[j]); }
+      // 手指经过的地方被抹平：棱角、褶子、原来的刀口都会被揉掉
+      const { nbr, nbrAt } = this;
       for (let i = 0; i < V; i++) {
-        const j = i * 3, w = W[i];
-        if (w < 0.02) { B[j] = O[j]; B[j + 1] = O[j + 1]; B[j + 2] = O[j + 2]; continue; }
-        const k = 1 - Math.exp(-dt * 20 * Math.min(1, w * 1.6));
-        for (let a = 0; a < 3; a++) {
-          const d = (clamp(B[j + a] + T[j + a], -0.62, 0.62) - O[j + a]) * k;
-          O[j + a] += d; moved += Math.abs(d);
+        const w = W[i];
+        if (w < 0.08) continue;
+        let ax = 0, ay = 0, az = 0;
+        const n0 = nbrAt[i], n1 = nbrAt[i + 1];
+        for (let k = n0; k < n1; k++) { const q = nbr[k] * 3; ax += P[q]; ay += P[q + 1]; az += P[q + 2]; }
+        const j = i * 3, c = (0.22 * Math.min(1, w)) / (n1 - n0), keep = 0.22 * Math.min(1, w);
+        O[j] += ax * c - P[j] * keep; O[j + 1] += ay * c - P[j + 1] * keep; O[j + 2] += az * c - P[j + 2] * keep;
+      }
+      // 体积守恒：按进去多少体积，就在周围鼓出多少。膏体不可压缩，这一步决定了它像不像真的
+      this.place();
+      const dv = this.vol0 - this.volume();
+      if (Math.abs(dv) > 2e-4) {
+        const va = this.va;
+        let sum = 0;
+        for (let i = 0; i < V; i++) { flow[i] = (flow[i] + 0.1) * Math.min(1, P[i * 3 + 1] / 0.12); sum += flow[i] * va[i]; }
+        const lam = clamp(dv / (sum || 1), -0.03, 0.03);
+        for (let i = 0; i < V; i++) {
+          const j = i * 3, d = flow[i] * lam;
+          O[j] += N[j] * d; O[j + 1] += N[j + 1] * d; O[j + 2] += N[j + 2] * d;
         }
       }
     } else {
-      const back = this.coreType.back;
+      const back = core.back;
       for (let i = 0; i < V; i++) {
         const j = i * 3;
         const k = 1 - Math.exp(-dt * (back + (20 - back) * Math.min(1, W[i] * 1.6)));
@@ -418,28 +488,57 @@ export class Squishy {
         }
       }
     }
-    this.rebase = false;
+
+    // 爆浆：脆皮裂了但还贴在上面时，内馅没处去，只能从裂缝里挤出来，在缝上鼓成一道道
+    if (core.ooze) {
+      const { seam, vOwnA, vOwnB, frags } = this;
+      for (let i = 0; i < V; i++) {
+        if (seam[i] === 0) continue;
+        const a = vOwnA[i], b = vOwnB[i];
+        const held = (a >= 0 && frags[a].state === CRACKED) || (b >= 0 && frags[b].state === CRACKED);
+        if (held) {
+          const target = seam[i] * Math.min(0.075, pressure[i] * 0.3);
+          if (target > Z[i]) { const d = (target - Z[i]) * Math.min(1, dt * 9); Z[i] += d; moved += d * 3; this.oozing += d; }
+        } else if (Z[i] > 0) Z[i] *= 1 - Math.min(1, dt * (0.5 + 6 * W[i])); // 皮掉了以后，鼓出来的那道会慢慢塌平，一按就抹掉
+      }
+    }
 
     // 不许按穿：每个顶点朝中心最多走 80%，两边对着捏也碰不到一起，最扁能压成一张厚饼
     const U = this.U, reach = this.reach;
     for (let i = 0; i < V; i++) {
       const j = i * 3, over = O[j] * U[j] + O[j + 1] * U[j + 1] + O[j + 2] * U[j + 2] - reach[i];
-      if (over > 0) {
-        O[j] -= U[j] * over; O[j + 1] -= U[j + 1] * over; O[j + 2] -= U[j + 2] * over;
-        if (mode === 'jelly') { Vel[j] *= 0.5; Vel[j + 1] *= 0.5; Vel[j + 2] *= 0.5; }
-      }
+      if (over > 0) { O[j] -= U[j] * over; O[j + 1] -= U[j + 1] * over; O[j + 2] -= U[j + 2] * over; }
+      const m = Math.hypot(O[j], O[j + 1], O[j + 2]);
+      if (m > 0.95) { const k = 0.95 / m; O[j] *= k; O[j + 1] *= k; O[j + 2] *= k; } // 再怎么揉也不会摊出盘子
     }
-    for (let j = 0; j < V * 3; j += 3) {
-      P[j] = P0[j] + O[j];
-      const y = P0[j + 1] + O[j + 1];
-      P[j + 1] = y < 0 ? 0 : y; // 盘子
-      P[j + 2] = P0[j + 2] + O[j + 2];
-    }
+    this.place();
     computeNormals(P, idx, this.N);
     const g = this.coreMesh.geometry;
     g.attributes.position.needsUpdate = true;
     g.attributes.normal.needsUpdate = true;
     this.squish = clamp(moved / V / dt / 0.9, 0, 1) * (0.25 + 0.75 * (1 - this.shellLeft));
+  }
+
+  /** 位移 → 顶点位置（盘子以下的压回盘面） */
+  place() {
+    const { P0, N0, V } = this.shape, { P, O, Z } = this;
+    for (let i = 0; i < V; i++) {
+      const j = i * 3, z = Z[i];
+      P[j] = P0[j] + O[j] + N0[j] * z;
+      const y = P0[j + 1] + O[j + 1] + N0[j + 1] * z;
+      P[j + 1] = y < 0 ? 0 : y;
+      P[j + 2] = P0[j + 2] + O[j + 2] + N0[j + 2] * z;
+    }
+  }
+
+  volume() {
+    const P = this.P, idx = this.shape.idx;
+    let v = 0;
+    for (let f = 0; f < idx.length; f += 3) {
+      const a = idx[f] * 3, b = idx[f + 1] * 3, c = idx[f + 2] * 3;
+      v += P[a] * (P[b + 1] * P[c + 2] - P[b + 2] * P[c + 1]) + P[a + 1] * (P[b + 2] * P[c] - P[b] * P[c + 2]) + P[a + 2] * (P[b] * P[c + 1] - P[b + 1] * P[c]);
+    }
+    return v / 6;
   }
 
   stepShell(dt) {
@@ -464,10 +563,12 @@ export class Squishy {
         if (fr.state === INTACT) {
           if (bend > fr.limit) this.crack(fr, 0.32);
         } else {
+          // 是"正在被继续挤"才会掉，而不是"变形了就一直掉"：膏体变形是永久的
           const lim = this.shellType.limit;
-          if (bend > lim * 2.4) fr.loose += dt * (bend / lim - 2.4) * 0.9;
           const disp = Math.hypot(ox, oy, oz);
-          if (disp > 0.2) fr.loose += dt * (disp - 0.2) * 7;
+          if (bend > lim * 2.4) fr.loose += (Math.max(0, bend - fr.pb) / lim) * 0.35;
+          if (disp > 0.2) fr.loose += Math.abs(disp - fr.pd) * 3;
+          fr.pb = bend; fr.pd = disp;
           for (const pr of active) {
             const d = pr.c.distanceTo(fr.a0);
             if (d < 0.45) fr.loose += dt * (0.35 + pr.speed * 1.5) * (1 - d / 0.45);
